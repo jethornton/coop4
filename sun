@@ -1,0 +1,143 @@
+#!/usr/bin/python3
+
+"""
+Description:
+Coop Door Control with GUI
+
+Requirements:
+Touch Screen or Monitor and Keyboard and Mouse
+
+Dependencies
+sudo apt install python3-pyqt5
+sudo apt install python3-rpi.gpio
+sudo apt install python3-pip
+sudo pip3 install astral
+
+Click on your chicken coop in google maps to get the latitude and longitude
+
+"""
+
+import sys, os
+from datetime import datetime, timedelta, timezone
+
+from PyQt5.QtWidgets import QApplication, QMainWindow
+from PyQt5.QtCore import QTimer
+from PyQt5 import uic
+
+import pytz
+from libcoop import Ledfade
+
+if os.uname()[4] == 'armv7l':
+	print('Raspberry Pi')
+	RPI3 = True
+else:
+	print('PC Maybe')
+	RPI3 = False
+
+if RPI3:
+	import RPi.GPIO as GPIO
+	# setup BCM pin GPIO17 which is physical pin 11
+	GPIO.setmode(GPIO.BCM)
+	GPIO.setwarnings(False)
+	GPIO.setup(17, GPIO.OUT)
+
+PBTZ = pytz.timezone('US/Central')
+HMS = '%I:%M:%S %p'
+
+class main(QMainWindow):
+	def __init__(self, *args, **kwargs):
+		super().__init__()
+
+		path, filename = os.path.split(os.path.realpath(__file__))
+		uic.loadUi(os.path.join(path, 'coop4.ui'), self)
+		self.setWindowTitle('Chicken Coop Test')
+
+		if RPI3:
+			self.pwm = GPIO.PWM(17, 100)
+
+
+		updateTimer = QTimer(self)
+		updateTimer.timeout.connect(self.update)
+		updateTimer.start(100)
+
+		self.startTime = datetime.now(PBTZ)
+		self.endTime = self.startTime + timedelta(minutes=3)
+		self.duration = self.endTime - self.startTime
+		self.ledPWM = Ledfade(start=self.startTime, end=self.endTime, action='sunrise')
+
+
+		self.sunrisePb.clicked.connect(self.fadein)
+		self.sunsetPb.clicked.connect(self.fadeout)
+
+		self.startLbl.setText(self.startTime.strftime(HMS))
+		self.endLbl.setText(self.endTime.strftime(HMS))
+		self.sunriseEvent = False
+		self.sunsetEvent = False
+
+		self.show()
+
+	def fadein(self):
+		if RPI3: # start the pwm output
+			self.pwm.start(0)
+		self.startTime = datetime.now(PBTZ)
+		self.endTime = self.startTime + timedelta(minutes=3)
+		self.duration = self.endTime - self.startTime
+		self.startTypeLbl.setText('Dawn')
+		self.endTypeLbl.setText('Sunrise')
+		self.ledPWM = Ledfade(start=self.startTime, end=self.endTime, action='sunrise')
+		self.sunriseEvent = True
+
+
+	def fadeout(self):
+		self.startTime = datetime.now(PBTZ)
+		self.endTime = self.startTime + timedelta(minutes=3)
+		self.duration = self.endTime - self.startTime
+		self.startTypeLbl.setText('Sunset')
+		self.endTypeLbl.setText('Dusk')
+		self.ledPWM = Ledfade(start=self.startTime, end=self.endTime, action='sunset')
+		self.sunsetEvent = True
+
+
+	def abort(self):
+		pass
+
+	def update(self):
+		self.currentLbl.setText(datetime.now(PBTZ).strftime(HMS))
+
+		if self.sunriseEvent:
+			now = datetime.now(PBTZ)
+			led = self.ledPWM.update(now)
+			if RPI3:
+				self.pwm.ChangeDutyCycle(led)
+			self.ledpwmPb.setValue(led)
+			self.ledPWMLbl.setText(f'{led:.2f}')
+			percentDone = ((now - self.startTime) / self.duration) * 100
+			self.timePb.setValue(percentDone)
+			self.percentLbl.setText(f'{percentDone:.2f}')
+			self.elapsedLbl.setText(f'{datetime.now(PBTZ) - self.startTime}')
+			if led == 100.0:
+				self.sunriseEvent = False
+				self.sunrisePb.setEnabled(False)
+				self.sunsetPb.setEnabled(True)
+
+		if self.sunsetEvent:
+			now = datetime.now(PBTZ)
+			led = self.ledPWM.update(now)
+			if RPI3:
+				self.pwm.ChangeDutyCycle(led)
+			self.ledpwmPb.setValue(led)
+			self.ledPWMLbl.setText(f'{led:.2f}')
+			percentDone = ((now - self.startTime) / self.duration) * 100
+			self.timePb.setValue(percentDone)
+			self.percentLbl.setText(f'{percentDone:.2f}')
+			self.elapsedLbl.setText(f'{datetime.now(PBTZ) - self.startTime}')
+			if led == 0.0:
+				self.pwm.stop()
+				self.sunsetEvent = False
+				self.sunrisePb.setEnabled(True)
+				self.sunsetPb.setEnabled(False)
+
+if __name__ == '__main__':
+	app = QApplication(sys.argv)
+	gui = main()
+	sys.exit(app.exec_())
